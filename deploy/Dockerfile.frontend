@@ -7,7 +7,7 @@ ARG VITE_API_ACCESS_TOKEN=
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 ENV VITE_API_ACCESS_TOKEN=$VITE_API_ACCESS_TOKEN
 
-COPY package.json package-lock*.json ./
+COPY package.json ./
 COPY tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/package.json
 COPY apps/backend/package.json apps/backend/package.json
