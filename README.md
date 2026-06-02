@@ -150,4 +150,6 @@ CORS_ORIGIN=https://nobounce.arkentechsolutions.com
 - Worker rate limit: `90` checks per minute
 - Queue retry attempts: `2`
 - Upload limit: `10 MB`
+- Upload row limit: `100,000`
+- XLSX XML entry limit: `20 MB`
 - Backend rate limit: `120` requests per minute
