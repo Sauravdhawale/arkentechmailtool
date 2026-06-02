@@ -9,11 +9,16 @@ import { EmailStatus, JobStatus, type Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { emailVerificationQueue } from "../lib/queue.js";
+import { config } from "../config.js";
 import { toCsv } from "../lib/csv.js";
+import { emailVerificationQueue } from "../lib/queue.js";
 import { prisma } from "../lib/prisma.js";
 import { serializeEmailResult, serializeJob } from "../lib/serializers.js";
-import { parseEmailUpload, UploadValidationError } from "../lib/uploadParser.js";
+import {
+  parseEmailUpload,
+  readUploadBuffer,
+  UploadValidationError
+} from "../lib/uploadParser.js";
 
 const jobParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -79,7 +84,8 @@ export async function bulkJobRoutes(app: FastifyInstance) {
 
     let parsedUpload;
     try {
-      parsedUpload = await parseEmailUpload(file.filename, await file.toBuffer());
+      const buffer = await readUploadBuffer(file.file, config.UPLOAD_MAX_BYTES);
+      parsedUpload = await parseEmailUpload(file.filename, buffer);
     } catch (error) {
       if (error instanceof UploadValidationError) {
         return reply.code(400).send({ error: error.message });
