@@ -1,0 +1,14 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+coverage
+.DS_Store
+*.log
+*.tsbuildinfo
+apps/frontend/.vite
+apps/frontend/dist
+apps/frontend/vite.config.js
+apps/frontend/vite.config.d.ts
+apps/backend/prisma/migrations/*/migration_lock.toml

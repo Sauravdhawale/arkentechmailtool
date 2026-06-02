@@ -1,0 +1,96 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum EmailStatus {
+  VALID
+  INVALID
+  RISKY
+  UNKNOWN
+  DUPLICATE
+}
+
+model BulkJob {
+  id              String        @id @default(cuid())
+  fileName        String
+  status          JobStatus     @default(QUEUED)
+  totalRecords    Int
+  uniqueEmails    Int
+  duplicateEmails Int
+  processedCount  Int           @default(0)
+  validCount      Int           @default(0)
+  invalidCount    Int           @default(0)
+  riskyCount      Int           @default(0)
+  unknownCount    Int           @default(0)
+  disposableCount Int           @default(0)
+  acceptAllCount  Int           @default(0)
+  startedAt       DateTime?
+  completedAt     DateTime?
+  errorMessage    String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  results         EmailResult[]
+
+  @@index([status, createdAt])
+}
+
+model EmailResult {
+  id                 String      @id @default(cuid())
+  jobId              String?
+  job                BulkJob?    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  email              String
+  normalizedEmail    String
+  domain             String?
+  status             EmailStatus @default(UNKNOWN)
+  reason             String?
+  reacherIsReachable String?
+  isDuplicate        Boolean     @default(false)
+  duplicateOf        String?
+  isDisposable       Boolean     @default(false)
+  isAcceptAll        Boolean     @default(false)
+  mxFound            Boolean?
+  smtpResult         String?
+  rawResponseJson    Json?
+  errorMessage       String?
+  checkedAt          DateTime?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  @@index([jobId, status])
+  @@index([normalizedEmail])
+}
+
+model ManualVerificationLog {
+  id                 String      @id @default(cuid())
+  email              String
+  normalizedEmail    String
+  domain             String?
+  status             EmailStatus
+  reason             String?
+  reacherIsReachable String?
+  isDisposable       Boolean     @default(false)
+  isAcceptAll        Boolean     @default(false)
+  mxFound            Boolean?
+  smtpResult         String?
+  rawResponseJson    Json?
+  ipAddress          String?
+  userAgent          String?
+  checkedAt          DateTime    @default(now())
+  createdAt          DateTime    @default(now())
+
+  @@index([status, createdAt])
+  @@index([normalizedEmail])
+}

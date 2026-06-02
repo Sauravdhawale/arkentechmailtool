@@ -1,0 +1,26 @@
+{
+  "name": "arkentechmailtool",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -ws --if-present",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "dev:frontend": "npm run dev -w @arken/frontend",
+    "dev:backend": "npm run dev -w @arken/backend",
+    "dev:worker": "npm run dev -w @arken/worker",
+    "prisma:generate": "npm run prisma:generate -w @arken/backend",
+    "prisma:migrate": "npm run prisma:migrate -w @arken/backend"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
