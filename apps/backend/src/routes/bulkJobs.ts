@@ -9,9 +9,8 @@ import { EmailStatus, JobStatus, type Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { config } from "../config.js";
-import { toCsv } from "../lib/csv.js";
 import { emailVerificationQueue } from "../lib/queue.js";
+import { toCsv } from "../lib/csv.js";
 import { prisma } from "../lib/prisma.js";
 import { serializeEmailResult, serializeJob } from "../lib/serializers.js";
 import {
@@ -19,6 +18,7 @@ import {
   readUploadBuffer,
   UploadValidationError
 } from "../lib/uploadParser.js";
+import { config } from "../config.js";
 
 const jobParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -322,6 +322,17 @@ export async function bulkJobRoutes(app: FastifyInstance) {
         completedAt: new Date()
       }
     });
+
+    const waitingJobs = await emailVerificationQueue.getJobs(
+      ["waiting", "delayed", "prioritized", "paused"],
+      0,
+      -1
+    );
+    await Promise.all(
+      waitingJobs
+        .filter((queueJob) => queueJob.data.jobId === params.jobId)
+        .map((queueJob) => queueJob.remove().catch(() => undefined))
+    );
 
     return { job: serializeJob(updated) };
   });
