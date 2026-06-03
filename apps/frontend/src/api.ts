@@ -134,6 +134,12 @@ export function getJob(jobId: string) {
   return apiFetch<JobDetailsResponse>(`/api/bulk/jobs/${jobId}`);
 }
 
+export function cancelJob(jobId: string) {
+  return apiFetch<{ job: BulkJob }>(`/api/bulk/jobs/${jobId}/cancel`, {
+    method: "POST"
+  });
+}
+
 export function getJobResults(
   jobId: string,
   status = "all",
