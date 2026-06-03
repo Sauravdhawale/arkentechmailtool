@@ -37,6 +37,7 @@ Rules enforced by both frontend preview and backend validation:
 - only values from the email list/column are verified
 - duplicates are recorded and exported, but only the first unique email is sent to Reacher
 - uploaded lists are submitted to Reacher's `/v1/bulk` job API, then the worker polls Reacher for progress and results
+- if self-hosted Reacher bulk worker mode is disabled, the worker falls back to throttled `/v1/check_email` verification
 
 ## Monorepo Layout
 
@@ -149,6 +150,7 @@ DATABASE_URL=postgresql://...
 REDIS_URL=redis://redis:6379
 REACHER_API_URL=https://verify.arkentechsolutions.com/v1/check_email
 REACHER_BULK_API_URL=https://verify.arkentechsolutions.com/v1/bulk
+REACHER_BULK_FALLBACK_TO_SINGLE=true
 REACHER_API_TOKEN=
 CORS_ORIGIN=https://nobounce.arkentechsolutions.com
 ```

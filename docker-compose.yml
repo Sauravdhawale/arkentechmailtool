@@ -43,6 +43,7 @@ services:
       REDIS_URL: redis://redis:6379
       REACHER_API_URL: https://verify.arkentechsolutions.com/v1/check_email
       REACHER_BULK_API_URL: https://verify.arkentechsolutions.com/v1/bulk
+      REACHER_BULK_FALLBACK_TO_SINGLE: "true"
       REACHER_API_TOKEN: ""
       WORKER_CONCURRENCY: 1
       WORKER_RATE_LIMIT_PER_MINUTE: 30

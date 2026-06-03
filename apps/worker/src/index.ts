@@ -10,6 +10,19 @@ import { Job, Worker } from "bullmq";
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 
+const booleanEnv = z.preprocess((value) => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "" ? true : ["1", "true", "yes", "on"].includes(normalized);
+  }
+
+  return value;
+}, z.boolean());
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().url().default("redis://localhost:6379"),
@@ -18,6 +31,7 @@ const envSchema = z.object({
     .url()
     .default("https://verify.arkentechsolutions.com/v1/check_email"),
   REACHER_BULK_API_URL: z.string().url().optional(),
+  REACHER_BULK_FALLBACK_TO_SINGLE: booleanEnv.default(true),
   REACHER_API_TOKEN: z.string().optional().default(""),
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(1),
   WORKER_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(30),
@@ -72,6 +86,17 @@ class JobStoppedError extends Error {
   constructor() {
     super("Job was stopped before completion.");
     this.name = "JobStoppedError";
+  }
+}
+
+class ReacherHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly body: string
+  ) {
+    super(message);
+    this.name = "ReacherHttpError";
   }
 }
 
@@ -135,7 +160,11 @@ async function fetchJson<T>(
 
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`${label} returned HTTP ${response.status}: ${body.slice(0, 300)}`);
+      throw new ReacherHttpError(
+        `${label} returned HTTP ${response.status}: ${body.slice(0, 300)}`,
+        response.status,
+        body
+      );
     }
 
     return (await response.json()) as T;
@@ -455,6 +484,14 @@ function isBulkCompleted(status: ReacherBulkStatusResponse): boolean {
   return value === "completed" || value === "complete" || value === "finished";
 }
 
+function isBulkWorkerModeDisabled(error: unknown): boolean {
+  return (
+    error instanceof ReacherHttpError &&
+    error.status === 503 &&
+    error.body.toLowerCase().includes("enable worker mode")
+  );
+}
+
 async function submitReacherBulkJob(jobId: string, emails: string[]): Promise<string> {
   await ensureCanContinue(jobId);
 
@@ -486,6 +523,110 @@ async function submitReacherBulkJob(jobId: string, emails: string[]): Promise<st
 
   await ensureCanContinue(jobId);
   return remoteJobId;
+}
+
+async function saveSingleFallbackResult(
+  jobId: string,
+  pendingResult: PendingEmailResult,
+  result: NormalizedVerificationResult
+) {
+  await ensureCanContinue(jobId);
+
+  const updated = await prisma.emailResult.updateMany({
+    where: {
+      id: pendingResult.id,
+      checkedAt: null,
+      isDuplicate: false
+    },
+    data: {
+      status: toPrismaStatus(result.status),
+      reason: result.reason,
+      reacherIsReachable: result.reacherIsReachable,
+      isDisposable: result.isDisposable,
+      isAcceptAll: result.isAcceptAll,
+      mxFound: result.mxFound,
+      smtpResult: result.smtpResult,
+      rawResponseJson: result.rawResponse as Prisma.InputJsonValue,
+      checkedAt: new Date(result.checkedAt)
+    }
+  });
+
+  if (updated.count > 0) {
+    await incrementJobCounters(jobId, result);
+  }
+}
+
+async function markSingleFallbackUnknown(
+  jobId: string,
+  pendingResult: PendingEmailResult,
+  error: unknown
+) {
+  await ensureCanContinue(jobId);
+
+  const message = error instanceof Error ? error.message : "Verification failed";
+  const updated = await prisma.emailResult.updateMany({
+    where: {
+      id: pendingResult.id,
+      checkedAt: null,
+      isDuplicate: false
+    },
+    data: {
+      status: EmailStatus.UNKNOWN,
+      reason: "Verification failed",
+      errorMessage: message,
+      checkedAt: new Date()
+    }
+  });
+
+  if (updated.count > 0) {
+    await incrementJobCounters(jobId, {
+      status: "unknown",
+      isDisposable: false,
+      isAcceptAll: false
+    });
+  }
+}
+
+async function processWithSingleFallback(
+  jobId: string,
+  pendingResults: PendingEmailResult[]
+) {
+  const delayMs = Math.ceil(60000 / config.WORKER_RATE_LIMIT_PER_MINUTE);
+  console.warn(
+    `Reacher bulk worker mode is disabled; falling back to ${config.REACHER_API_URL} for job ${jobId}.`
+  );
+
+  for (const [index, pendingResult] of pendingResults.entries()) {
+    await ensureCanContinue(jobId);
+
+    const currentResult = await prisma.emailResult.findUnique({
+      where: { id: pendingResult.id },
+      select: {
+        checkedAt: true,
+        isDuplicate: true
+      }
+    });
+
+    if (!currentResult || currentResult.checkedAt || currentResult.isDuplicate) {
+      continue;
+    }
+
+    try {
+      const result = await verifyEmail(pendingResult.email);
+      await saveSingleFallbackResult(jobId, pendingResult, result);
+    } catch (error) {
+      if (error instanceof JobStoppedError) {
+        throw error;
+      }
+      await markSingleFallbackUnknown(jobId, pendingResult, error);
+    }
+
+    if (index < pendingResults.length - 1) {
+      await sleepWithStopChecks(jobId, delayMs);
+    }
+  }
+
+  await recomputeJobCounters(jobId, JobStatus.COMPLETED);
 }
 
 async function pollReacherBulkJob(
@@ -735,12 +876,23 @@ async function processBulkVerificationJob(
     await ensureCanContinue(jobId);
 
     const baselineProcessed = await processedCountFromResults(jobId);
-    const remoteJobId =
-      bulkJob.reacherBulkJobId ??
-      (await submitReacherBulkJob(
-        jobId,
-        pendingResults.map((result) => result.email)
-      ));
+    let remoteJobId = bulkJob.reacherBulkJobId;
+
+    if (!remoteJobId) {
+      try {
+        remoteJobId = await submitReacherBulkJob(
+          jobId,
+          pendingResults.map((result) => result.email)
+        );
+      } catch (error) {
+        if (isBulkWorkerModeDisabled(error) && config.REACHER_BULK_FALLBACK_TO_SINGLE) {
+          await processWithSingleFallback(jobId, pendingResults);
+          return;
+        }
+
+        throw error;
+      }
+    }
 
     await pollReacherBulkJob(
       jobId,
