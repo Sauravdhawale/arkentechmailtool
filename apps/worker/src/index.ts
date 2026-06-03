@@ -78,6 +78,14 @@ async function incrementJobCounters(
   jobId: string,
   result: Pick<NormalizedVerificationResult, "status" | "isDisposable" | "isAcceptAll">
 ) {
+  const currentJob = await prisma.bulkJob.findUnique({
+    where: { id: jobId },
+    select: { status: true }
+  });
+  if (!currentJob || currentJob.status === JobStatus.CANCELLED) {
+    return;
+  }
+
   const data = {
     processedCount: { increment: 1 },
     validCount: { increment: result.status === "valid" ? 1 : 0 },
@@ -110,6 +118,14 @@ async function markUnknownAfterFinalAttempt(
   queueJob: Job<EmailVerificationJobData, unknown, "verify-email">,
   error: unknown
 ) {
+  const currentJob = await prisma.bulkJob.findUnique({
+    where: { id: queueJob.data.jobId },
+    select: { status: true }
+  });
+  if (!currentJob || currentJob.status === JobStatus.CANCELLED) {
+    return;
+  }
+
   const message = error instanceof Error ? error.message : "Verification failed";
   const checkedAt = new Date();
 
@@ -162,6 +178,14 @@ const worker = new Worker<EmailVerificationJobData, unknown, "verify-email">(
 
     try {
       const result = await verifyEmail(queueJob.data.email);
+      const latestJob = await prisma.bulkJob.findUnique({
+        where: { id: queueJob.data.jobId },
+        select: { status: true }
+      });
+      if (!latestJob || latestJob.status === JobStatus.CANCELLED) {
+        return;
+      }
+
       await prisma.emailResult.update({
         where: { id: queueJob.data.emailResultId },
         data: {
