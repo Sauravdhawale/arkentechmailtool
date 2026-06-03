@@ -1,7 +1,7 @@
-import { Download, ListChecks } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Download, ListChecks, XCircle } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { downloadJobResults, getJobs } from "../api";
+import { cancelJob, downloadJobResults, getJobs } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ProgressBar } from "../components/ProgressBar";
 import { StatusBadge } from "../components/StatusBadge";
@@ -21,14 +21,40 @@ export function Jobs() {
   const [status, setStatus] = useState<JobStatus | "all">("all");
   const [jobs, setJobs] = useState<BulkJob[]>([]);
   const [error, setError] = useState("");
+  const [cancelingIds, setCancelingIds] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
+  const load = useCallback(() => {
     getJobs(status)
       .then((response) => setJobs(response.items))
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Unable to load lists.");
       });
   }, [status]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const cancelListedJob = async (job: BulkJob) => {
+    if (!window.confirm(`Cancel verification for ${job.fileName}?`)) {
+      return;
+    }
+
+    setCancelingIds((current) => new Set(current).add(job.id));
+    setError("");
+    try {
+      await cancelJob(job.id);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to cancel job.");
+    } finally {
+      setCancelingIds((current) => {
+        const next = new Set(current);
+        next.delete(job.id);
+        return next;
+      });
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -92,7 +118,7 @@ export function Jobs() {
                   <th className="px-4 py-3 font-semibold">Disposable</th>
                   <th className="px-4 py-3 font-semibold">Duplicate</th>
                   <th className="px-4 py-3 font-semibold">Progress</th>
-                  <th className="px-4 py-3 font-semibold">Download</th>
+                  <th className="px-4 py-3 font-semibold">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
@@ -122,14 +148,27 @@ export function Jobs() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        className="focus-ring rounded-md p-2 text-slate-600 hover:bg-slate-100"
-                        aria-label={`Download ${job.fileName}`}
-                        onClick={() => void downloadJobResults(job.id, "all")}
-                      >
-                        <Download size={17} aria-hidden />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        {(job.status === "queued" || job.status === "processing") && (
+                          <button
+                            type="button"
+                            className="focus-ring rounded-md p-2 text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            aria-label={`Cancel ${job.fileName}`}
+                            disabled={cancelingIds.has(job.id)}
+                            onClick={() => void cancelListedJob(job)}
+                          >
+                            <XCircle size={17} aria-hidden />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="focus-ring rounded-md p-2 text-slate-600 hover:bg-slate-100"
+                          aria-label={`Download ${job.fileName}`}
+                          onClick={() => void downloadJobResults(job.id, "all")}
+                        >
+                          <Download size={17} aria-hidden />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
