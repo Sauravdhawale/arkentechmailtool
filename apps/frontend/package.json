@@ -12,12 +12,12 @@
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",
     "clsx": "^2.1.1",
+    "fflate": "^0.7.4",
     "lucide-react": "^0.554.0",
     "papaparse": "^5.5.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.6",
-    "read-excel-file": "^5.8.8",
     "recharts": "^3.4.1"
   },
   "devDependencies": {
