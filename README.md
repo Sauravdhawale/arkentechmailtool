@@ -15,19 +15,25 @@ NoBounce is a bulk and single email verification dashboard for Arken Tech Soluti
 
 Bulk uploads support `.csv` and `.xlsx` files only.
 
-The file must contain exactly one column named:
+CSV uploads may use an `emails` header, one email per line, or a comma-separated email list:
 
 ```csv
 emails
+john@example.com
+jane@example.com
 ```
+
+```csv
+john@example.com,jane@example.com
+```
+
+XLSX uploads should contain one populated email column. The column may include an optional `emails` header. Blank rows and unused worksheet cells are ignored.
 
 Rules enforced by both frontend preview and backend validation:
 
-- no extra columns
+- no extra populated XLSX columns
 - no column mapping
-- no auto-detection
-- no empty email cells
-- only emails from the `emails` column are verified
+- only values from the email list/column are verified
 - duplicates are recorded and exported, but only the first unique email is sent to Reacher
 
 ## Monorepo Layout
@@ -151,5 +157,5 @@ CORS_ORIGIN=https://nobounce.arkentechsolutions.com
 - Queue retry attempts: `2`
 - Upload limit: `10 MB`
 - Upload row limit: `100,000`
-- XLSX XML entry limit: `20 MB`
+- XLSX XML entry limit: `256 MB`
 - Backend rate limit: `120` requests per minute
