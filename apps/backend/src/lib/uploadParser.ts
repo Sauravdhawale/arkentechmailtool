@@ -150,42 +150,6 @@ function valuesFromHeaderlessCells(cells: unknown[]): string[] {
   return values;
 }
 
-function assertStrictRows(rows: unknown[][]): string[] {
-  if (rows.length === 0) {
-    throw new UploadValidationError('File must contain exactly one column named "emails".');
-  }
-
-  const header = rows[0];
-  const headerName = String(header[0]).replace(/^\uFEFF/, "").trim().toLowerCase();
-  if (header.length !== 1 || headerName !== EMAIL_COLUMN_NAME) {
-    throw new UploadValidationError('File must contain exactly one column named "emails".');
-  }
-
-  const emails: string[] = [];
-  rows.slice(1).forEach((row, index) => {
-    if (index + 1 > MAX_UPLOAD_ROWS) {
-      throw new UploadValidationError(`Upload contains more than ${MAX_UPLOAD_ROWS} email rows.`);
-    }
-
-    const meaningfulCells = row.filter((value) => String(value ?? "").trim().length > 0);
-    if (row.length > 1 || meaningfulCells.length > 1) {
-      throw new UploadValidationError("Extra columns are not allowed. Use only the emails column.");
-    }
-
-    const email = String(row[0] ?? "").trim();
-    if (!email) {
-      throw new UploadValidationError(`Row ${index + 2} has an empty emails value.`);
-    }
-    emails.push(email);
-  });
-
-  if (emails.length === 0) {
-    throw new UploadValidationError("File must include at least one email.");
-  }
-
-  return emails;
-}
-
 function assertEmailValues(values: string[]): string[] {
   if (values.length === 0) {
     throw new UploadValidationError("File must include at least one email.");
@@ -230,17 +194,6 @@ function parseCsvEmails(buffer: Buffer): string[] {
   if (rows.length === 0) {
     throw new UploadValidationError("File must include at least one email.");
   }
-
-  const firstRow = rows[0];
-  const firstRowValues = firstRow.map((cell) => String(cell ?? "").trim()).filter(Boolean);
-  const hasEmailsHeader =
-    firstRowValues.length === 1 &&
-    firstRowValues[0].replace(/^\uFEFF/, "").toLowerCase() === EMAIL_COLUMN_NAME;
-
-  if (hasEmailsHeader) {
-    return assertStrictRows(rows);
-  }
-
   return assertEmailValues(valuesFromHeaderlessCells(rows.flat()));
 }
 
