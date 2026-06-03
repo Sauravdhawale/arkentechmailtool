@@ -26,42 +26,24 @@ function emptyCounts(): Counts {
 
 export async function statsRoutes(app: FastifyInstance) {
   app.get("/api/stats", async () => {
-    const [
-      bulkGroups,
-      manualGroups,
-      bulkDisposable,
-      manualDisposable,
-      duplicateEmails,
-      bulkRiskyOrAcceptAll,
-      manualRiskyOrAcceptAll
-    ] = await Promise.all([
+    const [bulkGroups, bulkDisposable, duplicateEmails, bulkRiskyOrAcceptAll] =
+      await Promise.all([
         prisma.emailResult.groupBy({
           by: ["status"],
           _count: { _all: true },
-          where: { isDuplicate: false, checkedAt: { not: null } }
-        }),
-        prisma.manualVerificationLog.groupBy({
-          by: ["status"],
-          _count: { _all: true }
+          where: { jobId: { not: null }, isDuplicate: false, checkedAt: { not: null } }
         }),
         prisma.emailResult.count({
-          where: { isDisposable: true }
-        }),
-        prisma.manualVerificationLog.count({
-          where: { isDisposable: true }
+          where: { jobId: { not: null }, isDisposable: true, checkedAt: { not: null } }
         }),
         prisma.emailResult.count({
-          where: { isDuplicate: true }
+          where: { jobId: { not: null }, isDuplicate: true }
         }),
         prisma.emailResult.count({
           where: {
+            jobId: { not: null },
             isDuplicate: false,
             checkedAt: { not: null },
-            OR: [{ status: EmailStatus.RISKY }, { isAcceptAll: true }]
-          }
-        }),
-        prisma.manualVerificationLog.count({
-          where: {
             OR: [{ status: EmailStatus.RISKY }, { isAcceptAll: true }]
           }
         })
@@ -93,9 +75,8 @@ export async function statsRoutes(app: FastifyInstance) {
     };
 
     bulkGroups.forEach((group) => applyStatusCount(group.status, group._count._all));
-    manualGroups.forEach((group) => applyStatusCount(group.status, group._count._all));
-    counts.riskyEmails = bulkRiskyOrAcceptAll + manualRiskyOrAcceptAll;
-    counts.disposableEmails = bulkDisposable + manualDisposable;
+    counts.riskyEmails = bulkRiskyOrAcceptAll;
+    counts.disposableEmails = bulkDisposable;
     counts.duplicateEmails = duplicateEmails;
 
     return counts;
