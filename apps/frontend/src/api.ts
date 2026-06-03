@@ -15,6 +15,15 @@ type ApiOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
 };
 
+type BulkJobUploadResponse = {
+  jobId: string;
+  status: string;
+  fileName: string;
+  totalRecords: number;
+  duplicateEmails: number;
+  uniqueEmailsToVerify: number;
+};
+
 function headersFor(body: unknown): HeadersInit {
   const headers: Record<string, string> = {};
   if (!(body instanceof FormData)) {
@@ -62,19 +71,51 @@ export function verifySingleEmail(email: string) {
   });
 }
 
-export function createBulkJob(file: File) {
+export function createBulkJob(file: File, onUploadProgress?: (progress: number) => void) {
   const formData = new FormData();
   formData.append("file", file);
-  return apiFetch<{
-    jobId: string;
-    status: string;
-    fileName: string;
-    totalRecords: number;
-    duplicateEmails: number;
-    uniqueEmailsToVerify: number;
-  }>("/api/bulk/jobs", {
-    method: "POST",
-    body: formData
+
+  return new Promise<BulkJobUploadResponse>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `${API_BASE_URL}/api/bulk/jobs`);
+
+    if (API_ACCESS_TOKEN) {
+      request.setRequestHeader("x-api-key", API_ACCESS_TOKEN);
+    }
+
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable && onUploadProgress) {
+        onUploadProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      }
+    };
+
+    request.onload = () => {
+      let payload: BulkJobUploadResponse | { error?: string } = {};
+      try {
+        payload = JSON.parse(request.responseText || "{}") as
+          | BulkJobUploadResponse
+          | { error?: string };
+      } catch {
+        payload = {};
+      }
+
+      if (request.status >= 200 && request.status < 300) {
+        onUploadProgress?.(100);
+        resolve(payload as BulkJobUploadResponse);
+        return;
+      }
+
+      reject(
+        new Error(
+          "error" in payload && payload.error
+            ? payload.error
+            : `Request failed with HTTP ${request.status}`
+        )
+      );
+    };
+
+    request.onerror = () => reject(new Error("Upload failed. Check your network connection."));
+    request.send(formData);
   });
 }
 
