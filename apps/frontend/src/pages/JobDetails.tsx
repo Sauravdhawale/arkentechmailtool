@@ -1,4 +1,4 @@
-import { Download, ListChecks, RefreshCw } from "lucide-react";
+import { Download, ListChecks, RefreshCw, XCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -9,7 +9,7 @@ import {
   ResponsiveContainer,
   Tooltip
 } from "recharts";
-import { downloadJobResults, getJob, getJobResults } from "../api";
+import { cancelJob, downloadJobResults, getJob, getJobResults } from "../api";
 import { ProgressBar } from "../components/ProgressBar";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatDate } from "../lib/format";
@@ -42,6 +42,7 @@ export function JobDetails() {
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [error, setError] = useState("");
+  const [canceling, setCanceling] = useState(false);
 
   const load = useCallback(async () => {
     if (!jobId) {
@@ -76,6 +77,33 @@ export function JobDetails() {
 
   const chartData = details?.chart.filter((item) => item.count > 0) ?? [];
   const hasNextPage = page * 50 < totalResults;
+  const isCancellable =
+    details?.job.status === "queued" || details?.job.status === "processing";
+
+  const cancelCurrentJob = async () => {
+    if (!jobId || !window.confirm("Cancel this verification job? Queued emails will stop processing.")) {
+      return;
+    }
+
+    setCanceling(true);
+    setError("");
+    try {
+      const response = await cancelJob(jobId);
+      setDetails((current) =>
+        current
+          ? {
+              ...current,
+              job: response.job
+            }
+          : current
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to cancel job.");
+    } finally {
+      setCanceling(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -91,14 +119,27 @@ export function JobDetails() {
             <p className="mt-1 font-mono text-xs text-slate-500">{details.job.id}</p>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="focus-ring inline-flex items-center justify-center gap-2 rounded-md border border-line bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          <RefreshCw size={16} aria-hidden />
-          Refresh
-        </button>
+        <div className="flex flex-wrap gap-2">
+          {isCancellable && (
+            <button
+              type="button"
+              disabled={canceling}
+              onClick={() => void cancelCurrentJob()}
+              className="focus-ring inline-flex items-center justify-center gap-2 rounded-md border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <XCircle size={16} aria-hidden />
+              {canceling ? "Cancelling..." : "Cancel Job"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="focus-ring inline-flex items-center justify-center gap-2 rounded-md border border-line bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <RefreshCw size={16} aria-hidden />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && (
