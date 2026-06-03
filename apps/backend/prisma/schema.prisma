@@ -37,6 +37,8 @@ model BulkJob {
   unknownCount    Int           @default(0)
   disposableCount Int           @default(0)
   acceptAllCount  Int           @default(0)
+  reacherBulkJobId String?
+  reacherBulkSubmittedAt DateTime?
   startedAt       DateTime?
   completedAt     DateTime?
   errorMessage    String?

@@ -3,11 +3,21 @@ import { config } from "../config.js";
 
 export const emailVerificationQueueName = "email-verification";
 
-export type EmailVerificationJobData = {
+export type LegacyEmailVerificationJobData = {
   jobId: string;
   emailResultId: string;
   email: string;
 };
+
+export type BulkEmailVerificationJobData = {
+  jobId: string;
+};
+
+export type EmailVerificationJobData =
+  | LegacyEmailVerificationJobData
+  | BulkEmailVerificationJobData;
+
+export type EmailVerificationJobName = "verify-email" | "verify-bulk-job";
 
 function connectionOptions(redisUrl: string) {
   const url = new URL(redisUrl);
@@ -26,7 +36,7 @@ export const redisConnection = connectionOptions(config.REDIS_URL);
 export const emailVerificationQueue = new Queue<
   EmailVerificationJobData,
   unknown,
-  "verify-email"
+  EmailVerificationJobName
 >(
   emailVerificationQueueName,
   {

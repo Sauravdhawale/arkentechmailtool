@@ -42,9 +42,13 @@ services:
       DATABASE_URL: postgresql://arkenmail:arkenmail@postgres:5432/arkenmailtool?schema=public
       REDIS_URL: redis://redis:6379
       REACHER_API_URL: https://verify.arkentechsolutions.com/v1/check_email
+      REACHER_BULK_API_URL: https://verify.arkentechsolutions.com/v1/bulk
       REACHER_API_TOKEN: ""
-      WORKER_CONCURRENCY: 3
-      WORKER_RATE_LIMIT_PER_MINUTE: 90
+      WORKER_CONCURRENCY: 1
+      WORKER_RATE_LIMIT_PER_MINUTE: 30
+      BULK_POLL_INTERVAL_MS: 5000
+      BULK_RESULTS_PAGE_SIZE: 500
+      BULK_MAX_WAIT_MINUTES: 240
     depends_on:
       - postgres
       - redis

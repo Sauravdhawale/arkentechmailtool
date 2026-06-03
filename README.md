@@ -9,7 +9,8 @@ NoBounce is a bulk and single email verification dashboard for Arken Tech Soluti
 - Queue: Redis, BullMQ
 - Worker: Node.js worker process
 - Reverse proxy: Caddy on Hostinger VPS
-- Reacher: `https://verify.arkentechsolutions.com/v1/check_email`
+- Reacher single verification: `https://verify.arkentechsolutions.com/v1/check_email`
+- Reacher bulk verification: `https://verify.arkentechsolutions.com/v1/bulk`
 
 ## Upload Rules
 
@@ -35,6 +36,7 @@ Rules enforced by both frontend preview and backend validation:
 - no column mapping
 - only values from the email list/column are verified
 - duplicates are recorded and exported, but only the first unique email is sent to Reacher
+- uploaded lists are submitted to Reacher's `/v1/bulk` job API, then the worker polls Reacher for progress and results
 
 ## Monorepo Layout
 
@@ -146,6 +148,7 @@ Set backend/worker variables:
 DATABASE_URL=postgresql://...
 REDIS_URL=redis://redis:6379
 REACHER_API_URL=https://verify.arkentechsolutions.com/v1/check_email
+REACHER_BULK_API_URL=https://verify.arkentechsolutions.com/v1/bulk
 REACHER_API_TOKEN=
 CORS_ORIGIN=https://nobounce.arkentechsolutions.com
 ```

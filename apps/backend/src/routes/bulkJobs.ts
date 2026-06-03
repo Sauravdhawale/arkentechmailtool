@@ -94,7 +94,7 @@ export async function bulkJobRoutes(app: FastifyInstance) {
     }
 
     const seen = new Map<string, string>();
-    const queued: Array<{ emailResultId: string; email: string }> = [];
+    let emailsToVerify = 0;
     let duplicateRows = 0;
     let invalidRows = 0;
     const now = new Date();
@@ -135,7 +135,7 @@ export async function bulkJobRoutes(app: FastifyInstance) {
           };
         }
 
-        queued.push({ emailResultId: id, email });
+        emailsToVerify += 1;
         return {
           id,
           ...base,
@@ -145,7 +145,7 @@ export async function bulkJobRoutes(app: FastifyInstance) {
     );
 
     const initialProcessedCount = duplicateRows + invalidRows;
-    const jobStatus = queued.length > 0 ? JobStatus.QUEUED : JobStatus.COMPLETED;
+    const jobStatus = emailsToVerify > 0 ? JobStatus.QUEUED : JobStatus.COMPLETED;
 
     const job = await prisma.bulkJob.create({
       data: {
@@ -156,7 +156,7 @@ export async function bulkJobRoutes(app: FastifyInstance) {
         duplicateEmails: duplicateRows,
         processedCount: initialProcessedCount,
         invalidCount: invalidRows,
-        completedAt: queued.length > 0 ? null : now,
+        completedAt: emailsToVerify > 0 ? null : now,
         results: {
           createMany: {
             data: resultRows
@@ -165,20 +165,8 @@ export async function bulkJobRoutes(app: FastifyInstance) {
       }
     });
 
-    if (queued.length > 0) {
-      await emailVerificationQueue.addBulk(
-        queued.map((item) => ({
-          name: "verify-email",
-          data: {
-            jobId: job.id,
-            emailResultId: item.emailResultId,
-            email: item.email
-          },
-          opts: {
-            jobId: item.emailResultId
-          }
-        }))
-      );
+    if (emailsToVerify > 0) {
+      await emailVerificationQueue.add("verify-bulk-job", { jobId: job.id }, { jobId: job.id });
     }
 
     return reply.code(201).send({
@@ -322,6 +310,14 @@ export async function bulkJobRoutes(app: FastifyInstance) {
         completedAt: new Date()
       }
     });
+
+    const directQueueJob = await emailVerificationQueue.getJob(params.jobId);
+    if (directQueueJob) {
+      await directQueueJob.discard();
+      if (!(await directQueueJob.isActive())) {
+        await directQueueJob.remove().catch(() => undefined);
+      }
+    }
 
     const waitingJobs = await emailVerificationQueue.getJobs(
       ["waiting", "delayed", "prioritized", "paused"],
