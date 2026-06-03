@@ -4,7 +4,7 @@ import { unzipSync, type Unzipped } from "fflate";
 import type { Readable } from "node:stream";
 
 const MAX_UPLOAD_ROWS = Number(process.env.UPLOAD_MAX_ROWS ?? 100_000);
-const MAX_XLSX_XML_BYTES = Number(process.env.XLSX_MAX_XML_BYTES ?? 20 * 1024 * 1024);
+const MAX_XLSX_XML_BYTES = Number(process.env.XLSX_MAX_XML_BYTES ?? 256 * 1024 * 1024);
 
 export type ParsedEmailUpload = {
   emails: string[];
@@ -142,13 +142,22 @@ function sharedStringsFromXml(xml: string | undefined): string[] {
   return values;
 }
 
+function valuesFromHeaderlessCells(cells: unknown[]): string[] {
+  const values = cells.map((cell) => String(cell ?? "").trim()).filter(Boolean);
+  if (values[0]?.replace(/^\uFEFF/, "").toLowerCase() === EMAIL_COLUMN_NAME) {
+    return values.slice(1);
+  }
+  return values;
+}
+
 function assertStrictRows(rows: unknown[][]): string[] {
   if (rows.length === 0) {
     throw new UploadValidationError('File must contain exactly one column named "emails".');
   }
 
   const header = rows[0];
-  if (header.length !== 1 || String(header[0]).replace(/^\uFEFF/, "") !== EMAIL_COLUMN_NAME) {
+  const headerName = String(header[0]).replace(/^\uFEFF/, "").trim().toLowerCase();
+  if (header.length !== 1 || headerName !== EMAIL_COLUMN_NAME) {
     throw new UploadValidationError('File must contain exactly one column named "emails".');
   }
 
@@ -175,6 +184,16 @@ function assertStrictRows(rows: unknown[][]): string[] {
   }
 
   return emails;
+}
+
+function assertEmailValues(values: string[]): string[] {
+  if (values.length === 0) {
+    throw new UploadValidationError("File must include at least one email.");
+  }
+  if (values.length > MAX_UPLOAD_ROWS) {
+    throw new UploadValidationError(`Upload contains more than ${MAX_UPLOAD_ROWS} email rows.`);
+  }
+  return values;
 }
 
 function summarize(emails: string[]): ParsedEmailUpload {
@@ -206,6 +225,25 @@ function parseCsvRows(buffer: Buffer): unknown[][] {
   }) as unknown[][];
 }
 
+function parseCsvEmails(buffer: Buffer): string[] {
+  const rows = parseCsvRows(buffer);
+  if (rows.length === 0) {
+    throw new UploadValidationError("File must include at least one email.");
+  }
+
+  const firstRow = rows[0];
+  const firstRowValues = firstRow.map((cell) => String(cell ?? "").trim()).filter(Boolean);
+  const hasEmailsHeader =
+    firstRowValues.length === 1 &&
+    firstRowValues[0].replace(/^\uFEFF/, "").toLowerCase() === EMAIL_COLUMN_NAME;
+
+  if (hasEmailsHeader) {
+    return assertStrictRows(rows);
+  }
+
+  return assertEmailValues(valuesFromHeaderlessCells(rows.flat()));
+}
+
 function cellValueFromXml(cellXml: string, attrs: Record<string, string>, sharedStrings: string[]) {
   if (attrs.t === "inlineStr") {
     return textFromXmlParts(cellXml, "t").trim();
@@ -232,7 +270,7 @@ function parseXlsxRows(buffer: Buffer): unknown[][] {
   }
 
   const sharedStrings = sharedStringsFromXml(zipText(entries, "xl/sharedStrings.xml"));
-  const rows = new Map<number, string>();
+  const cellsByRow = new Map<number, Map<string, string>>();
 
   for (const match of sheetXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>|<c\b([^>]*)\/>/g)) {
     const attrs = parseAttributes(match[1] ?? match[3] ?? "");
@@ -243,33 +281,36 @@ function parseXlsxRows(buffer: Buffer): unknown[][] {
     if (!rowNumber || !column) {
       continue;
     }
-    if (rowNumber > MAX_UPLOAD_ROWS + 1) {
-      throw new UploadValidationError(`Upload contains more than ${MAX_UPLOAD_ROWS} email rows.`);
-    }
 
     const value = cellValueFromXml(match[2] ?? "", attrs, sharedStrings);
     if (!value) {
       continue;
     }
-    if (column !== "A") {
-      throw new UploadValidationError("Extra columns are not allowed. Use only the emails column.");
-    }
-    if (rows.has(rowNumber)) {
-      throw new UploadValidationError("Extra columns are not allowed. Use only the emails column.");
-    }
-    rows.set(rowNumber, value);
+
+    const row = cellsByRow.get(rowNumber) ?? new Map<string, string>();
+    row.set(column, value);
+    cellsByRow.set(rowNumber, row);
   }
 
-  if (rows.size === 0) {
-    throw new UploadValidationError('File must contain exactly one column named "emails".');
+  if (cellsByRow.size === 0) {
+    throw new UploadValidationError("File must include at least one email.");
   }
 
-  const maxRow = Math.max(...rows.keys());
-  const parsedRows: unknown[][] = [];
-  for (let rowNumber = 1; rowNumber <= maxRow; rowNumber += 1) {
-    parsedRows.push([rows.get(rowNumber) ?? ""]);
+  const populatedColumns = new Set<string>();
+  for (const row of cellsByRow.values()) {
+    for (const column of row.keys()) {
+      populatedColumns.add(column);
+    }
   }
-  return parsedRows;
+
+  if (populatedColumns.size !== 1) {
+    throw new UploadValidationError("Extra columns are not allowed. Use only the emails column.");
+  }
+
+  const emailColumn = [...populatedColumns][0];
+  return [...cellsByRow.entries()]
+    .sort(([rowA], [rowB]) => rowA - rowB)
+    .map(([, row]) => [row.get(emailColumn) ?? ""]);
 }
 
 export async function readUploadBuffer(
@@ -303,12 +344,16 @@ export async function parseEmailUpload(
     lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")
       ? await parseXlsxRows(buffer)
       : lowerName.endsWith(".csv")
-        ? parseCsvRows(buffer)
+        ? null
         : null;
+
+  if (lowerName.endsWith(".csv")) {
+    return summarize(parseCsvEmails(buffer));
+  }
 
   if (!rows) {
     throw new UploadValidationError("Only CSV and XLSX files are supported.");
   }
 
-  return summarize(assertStrictRows(rows));
+  return summarize(assertEmailValues(valuesFromHeaderlessCells(rows.flat())));
 }
