@@ -2,6 +2,7 @@ import { FileSpreadsheet, UploadCloud } from "lucide-react";
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createBulkJob } from "../api";
+import { ProgressBar } from "../components/ProgressBar";
 import { formatNumber } from "../lib/format";
 import { isSupportedUpload, previewEmailFile } from "../lib/filePreview";
 import type { UploadPreview } from "../types";
@@ -13,6 +14,7 @@ export function VerifyList() {
   const [preview, setPreview] = useState<UploadPreview | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [dragging, setDragging] = useState(false);
 
   const applyFile = async (nextFile: File | undefined) => {
@@ -45,8 +47,9 @@ export function VerifyList() {
 
     setLoading(true);
     setError("");
+    setUploadProgress(0);
     try {
-      const response = await createBulkJob(file);
+      const response = await createBulkJob(file, setUploadProgress);
       navigate(`/jobs/${response.jobId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create verification job.");
@@ -59,7 +62,9 @@ export function VerifyList() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-normal text-ink">Verify List</h1>
-        <p className="mt-1 text-sm text-slate-500">CSV or XLSX with one column: emails</p>
+        <p className="mt-1 text-sm text-slate-500">
+          CSV comma/newline list or XLSX with one populated email column
+        </p>
       </div>
 
       <section className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.6fr)]">
@@ -88,7 +93,7 @@ export function VerifyList() {
             </div>
             <div className="mt-5 text-lg font-semibold">Drop CSV/XLSX upload</div>
             <div className="mt-2 max-w-md text-sm text-slate-500">
-              Required header: emails
+              Header is optional for CSV. XLSX should contain one populated email column.
             </div>
           </div>
           <input
@@ -145,8 +150,21 @@ export function VerifyList() {
             className="focus-ring mt-6 inline-flex w-full items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             <UploadCloud size={17} aria-hidden />
-            {loading ? "Starting..." : "Start Verification"}
+            {loading ? `Uploading ${uploadProgress}%` : "Start Verification"}
           </button>
+
+          {loading && (
+            <div className="mt-4 rounded-md border border-line bg-slate-50 px-3 py-3">
+              <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-600">
+                <span>Uploading file</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <ProgressBar value={uploadProgress} />
+              <p className="mt-2 text-xs text-slate-500">
+                Verification progress will appear on the job details page.
+              </p>
+            </div>
+          )}
         </div>
       </section>
     </div>
