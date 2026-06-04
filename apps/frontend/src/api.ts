@@ -26,7 +26,7 @@ type BulkJobUploadResponse = {
 
 function headersFor(body: unknown): HeadersInit {
   const headers: Record<string, string> = {};
-  if (!(body instanceof FormData)) {
+  if (body !== undefined && !(body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
   if (API_ACCESS_TOKEN) {
@@ -132,12 +132,6 @@ export function getJobs(status?: JobStatus | "all", page = 1, limit = 20) {
 
 export function getJob(jobId: string) {
   return apiFetch<JobDetailsResponse>(`/api/bulk/jobs/${jobId}`);
-}
-
-export function cancelJob(jobId: string) {
-  return apiFetch<{ job: BulkJob }>(`/api/bulk/jobs/${jobId}/cancel`, {
-    method: "POST"
-  });
 }
 
 export function getJobResults(

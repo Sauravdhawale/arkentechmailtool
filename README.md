@@ -37,7 +37,7 @@ Rules enforced by both frontend preview and backend validation:
 - only values from the email list/column are verified
 - duplicates are recorded and exported, but only the first unique email is sent to Reacher
 - uploaded lists are submitted to Reacher's `/v1/bulk` job API, then the worker polls Reacher for progress and results
-- if self-hosted Reacher bulk worker mode is disabled, the worker falls back to throttled `/v1/check_email` verification
+- uploaded lists require Reacher bulk worker mode; list jobs do not fall back to `/v1/check_email`
 
 ## Monorepo Layout
 
@@ -87,7 +87,6 @@ GET  /api/bulk/jobs
 GET  /api/bulk/jobs/:jobId
 GET  /api/bulk/jobs/:jobId/results
 GET  /api/bulk/jobs/:jobId/download
-POST /api/bulk/jobs/:jobId/cancel
 ```
 
 Download filters:
@@ -150,15 +149,33 @@ DATABASE_URL=postgresql://...
 REDIS_URL=redis://redis:6379
 REACHER_API_URL=https://verify.arkentechsolutions.com/v1/check_email
 REACHER_BULK_API_URL=https://verify.arkentechsolutions.com/v1/bulk
-REACHER_BULK_FALLBACK_TO_SINGLE=true
 REACHER_API_TOKEN=
 CORS_ORIGIN=https://nobounce.arkentechsolutions.com
 ```
 
+## Reacher Bulk Requirement
+
+NoBounce bulk lists use Reacher's `/v1/bulk` API only. Your self-hosted Reacher
+deployment must have worker mode, RabbitMQ, and Postgres storage configured.
+
+Minimum Reacher-side variables:
+
+```env
+RCH__WORKER__ENABLE=true
+RCH__WORKER__RABBITMQ__URL=amqp://user:password@rabbitmq:5672
+RCH__WORKER__RABBITMQ__CONCURRENCY=10
+RCH__STORAGE__0__POSTGRES__DB_URL=postgresql://user:password@postgres:5432/reacher
+```
+
+Scale Reacher throughput by increasing `RCH__WORKER__RABBITMQ__CONCURRENCY`
+and/or the number of Reacher worker containers. Scale NoBounce throughput by
+increasing `WORKER_CONCURRENCY` or by running more NoBounce worker replicas.
+
 ## Operational Defaults
 
-- Worker concurrency: `3`
-- Worker rate limit: `90` checks per minute
+- Worker concurrency: `3` bulk jobs at a time
+- Worker rate limit: `30` bulk job starts per minute
+- Bulk result page size: `1000`
 - Queue retry attempts: `2`
 - Upload limit: `10 MB`
 - Upload row limit: `100,000`
