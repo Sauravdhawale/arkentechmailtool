@@ -2,7 +2,11 @@ import { singleVerifyRequestSchema } from "@arken/shared";
 import { EmailStatus, Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../lib/prisma.js";
-import { verifyEmailWithReacher } from "../lib/reacher.js";
+import {
+  ReacherVerificationError,
+  unknownVerificationResult,
+  verifyEmailWithReacher
+} from "../lib/reacher.js";
 import { serializeManualLog } from "../lib/serializers.js";
 
 function toPrismaStatus(status: string): EmailStatus {
@@ -19,7 +23,17 @@ export async function verifyRoutes(app: FastifyInstance) {
       });
     }
 
-    const verification = await verifyEmailWithReacher(parsed.data.email);
+    let verification;
+    try {
+      verification = await verifyEmailWithReacher(parsed.data.email);
+    } catch (error) {
+      if (!(error instanceof ReacherVerificationError)) {
+        throw error;
+      }
+
+      request.log.warn({ error }, "Single email verification failed at Reacher");
+      verification = unknownVerificationResult(parsed.data.email, error.message);
+    }
 
     const log = await prisma.manualVerificationLog.create({
       data: {

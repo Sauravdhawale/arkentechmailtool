@@ -2,6 +2,7 @@ import "dotenv/config";
 import {
   normalizeEmail,
   normalizeReacherResult,
+  unwrapReacherResult,
   type NormalizedVerificationResult,
   type ReacherResponse
 } from "@arken/shared";
@@ -19,7 +20,7 @@ const envSchema = z.object({
     .default("https://verify.arkentechsolutions.com/v1/check_email"),
   REACHER_BULK_API_URL: z.string().url().optional(),
   REACHER_API_TOKEN: z.string().optional().default(""),
-  WORKER_CONCURRENCY: z.coerce.number().int().positive().default(3),
+  WORKER_CONCURRENCY: z.coerce.number().int().positive().default(1),
   WORKER_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(30),
   BULK_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   BULK_RESULTS_PAGE_SIZE: z.coerce.number().int().positive().max(1000).default(1000),
@@ -444,24 +445,52 @@ function bulkResultsUrl(remoteJobId: string, limit: number, offset: number) {
   return url.toString();
 }
 
+function looksLikeReacherResult(value: unknown): value is ReacherResponse {
+  const record = asRecord(value);
+  if (!record) {
+    return false;
+  }
+
+  const unwrapped = unwrapReacherResult(record);
+  return Boolean(
+    unwrapped.is_reachable ??
+      unwrapped.input ??
+      unwrapped.email ??
+      unwrapped.to_email ??
+      unwrapped.address ??
+      unwrapped.smtp ??
+      unwrapped.mx ??
+      unwrapped.syntax
+  );
+}
+
 function extractBulkResults(payload: unknown): ReacherResponse[] {
   const record = asRecord(payload);
   const rawResults = record?.results ?? record?.data ?? record?.items ?? payload;
 
   if (Array.isArray(rawResults)) {
-    return rawResults.filter((item): item is ReacherResponse => asRecord(item) !== null);
+    return rawResults.filter(looksLikeReacherResult);
   }
 
   const singleResult = asRecord(rawResults);
-  return singleResult ? [singleResult] : [];
+  if (!singleResult) {
+    return [];
+  }
+
+  if (looksLikeReacherResult(singleResult)) {
+    return [singleResult];
+  }
+
+  return Object.values(singleResult).filter(looksLikeReacherResult);
 }
 
 function resultEmail(raw: ReacherResponse): string | null {
+  const unwrapped = unwrapReacherResult(raw);
   return (
-    stringValue(raw.input) ??
-    stringValue(raw.email) ??
-    stringValue(raw.to_email) ??
-    stringValue(raw.address)
+    stringValue(unwrapped.input) ??
+    stringValue(unwrapped.email) ??
+    stringValue(unwrapped.to_email) ??
+    stringValue(unwrapped.address)
   );
 }
 

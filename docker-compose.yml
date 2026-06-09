@@ -21,6 +21,7 @@ services:
       REDIS_URL: redis://redis:6379
       REACHER_API_URL: https://verify.arkentechsolutions.com/v1/check_email
       REACHER_API_TOKEN: ""
+      REACHER_REQUEST_TIMEOUT_MS: 35000
       CORS_ORIGIN: https://nobounce.arkentechsolutions.com,http://localhost:5173
       API_ACCESS_TOKEN: ""
       RATE_LIMIT_MAX: 120
@@ -44,7 +45,7 @@ services:
       REACHER_API_URL: https://verify.arkentechsolutions.com/v1/check_email
       REACHER_BULK_API_URL: https://verify.arkentechsolutions.com/v1/bulk
       REACHER_API_TOKEN: ""
-      WORKER_CONCURRENCY: 3
+      WORKER_CONCURRENCY: 1
       WORKER_RATE_LIMIT_PER_MINUTE: 30
       BULK_POLL_INTERVAL_MS: 5000
       BULK_RESULTS_PAGE_SIZE: 1000

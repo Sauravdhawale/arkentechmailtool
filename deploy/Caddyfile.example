@@ -5,3 +5,25 @@ nobounce.arkentechsolutions.com {
 nobounce-api.arkentechsolutions.com {
   reverse_proxy 127.0.0.1:4000
 }
+
+verify.arkentechsolutions.com {
+  header {
+    Access-Control-Allow-Origin "https://nobounce.arkentechsolutions.com"
+    Access-Control-Allow-Methods "GET, POST, OPTIONS"
+    Access-Control-Allow-Headers "*"
+    Vary "Origin"
+  }
+
+  @options {
+    method OPTIONS
+  }
+  respond @options 204
+
+  @single path /v1/check_email
+  reverse_proxy @single 127.0.0.1:8081
+
+  @bulk path /v1/bulk*
+  reverse_proxy @bulk 127.0.0.1:8080
+
+  reverse_proxy 127.0.0.1:8081
+}

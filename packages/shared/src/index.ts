@@ -111,13 +111,67 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function errorMessage(value: unknown): string | null {
+  if (typeof value === "string" && value.length > 0) {
+    return value;
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const message = asString(record.message);
+  const type = asString(record.type);
+
+  if (type && message) {
+    return `${type}: ${message}`;
+  }
+
+  return message ?? type;
+}
+
+export function unwrapReacherResult(raw: ReacherResponse): ReacherResponse {
+  if (raw.is_reachable) {
+    return raw;
+  }
+
+  const candidates = [
+    raw.result,
+    raw.output,
+    raw.verification,
+    raw.response,
+    raw.data
+  ];
+
+  for (const candidate of candidates) {
+    const nested = asRecord(candidate);
+    if (nested?.is_reachable) {
+      return {
+        ...nested,
+        input: nested.input ?? raw.input ?? raw.email ?? raw.to_email
+      };
+    }
+  }
+
+  return raw;
+}
+
 function getReason(raw: ReacherResponse): string | null {
   return (
     asString(raw.reason) ??
     asString(raw.message) ??
-    asString(valueAt(raw, ["syntax", "error"])) ??
-    asString(valueAt(raw, ["smtp", "error"])) ??
-    asString(valueAt(raw, ["mx", "error"])) ??
+    errorMessage(raw.error) ??
+    errorMessage(valueAt(raw, ["syntax", "error"])) ??
+    errorMessage(valueAt(raw, ["smtp", "error"])) ??
+    errorMessage(raw.smtp) ??
+    errorMessage(valueAt(raw, ["mx", "error"])) ??
     asString(raw.is_reachable) ??
     null
   );
@@ -155,6 +209,12 @@ function getMxFound(raw: ReacherResponse): boolean | null {
 }
 
 function getSmtpResult(raw: ReacherResponse): string | null {
+  const smtpError =
+    errorMessage(valueAt(raw, ["smtp", "error"])) ?? errorMessage(raw.smtp);
+  if (smtpError) {
+    return smtpError;
+  }
+
   const deliverable = valueAt(raw, ["smtp", "is_deliverable"]);
   if (typeof deliverable === "boolean") {
     return deliverable ? "deliverable" : "not_deliverable";
@@ -165,9 +225,19 @@ function getSmtpResult(raw: ReacherResponse): string | null {
     return canConnect ? "connected" : "not_connected";
   }
 
+  const method = asRecord(valueAt(raw, ["debug", "smtp", "verif_method"]));
+  const methodType = asString(method?.type);
+  const methodHost = asString(method?.host);
+  const methodPort = method?.port;
+  if (methodType) {
+    return methodHost
+      ? `${methodType} ${methodHost}${methodPort ? `:${methodPort}` : ""}`
+      : methodType;
+  }
+
   return (
-    asString(valueAt(raw, ["smtp", "error"])) ??
     asString(valueAt(raw, ["smtp", "status"])) ??
+    asString(raw.is_reachable) ??
     null
   );
 }
@@ -176,6 +246,7 @@ export function normalizeReacherResult(
   email: string,
   raw: ReacherResponse
 ): NormalizedVerificationResult {
+  raw = unwrapReacherResult(raw);
   const normalizedEmail = normalizeEmail(email);
   const reacherIsReachable = asString(raw.is_reachable);
 

@@ -1,0 +1,116 @@
+# Example Reacher stack for concurrent /v1/check_email and /v1/bulk support.
+#
+# This is separate from NoBounce's docker-compose.yml. NoBounce uses Redis/BullMQ
+# for app jobs; Reacher uses RabbitMQ/Postgres internally for /v1/bulk.
+#
+# Traffic split:
+#   - single-api on 127.0.0.1:8081 handles /v1/check_email.
+#   - bulk-api on 127.0.0.1:8080 handles /v1/bulk and bulk result polling.
+#   - reacher-worker containers consume RabbitMQ tasks for bulk.
+#
+# Suggested usage:
+#   cp deploy/reacher-bulk-compose.example.yml /opt/reacher/docker-compose.yml
+#   cd /opt/reacher
+#   REACHER_RABBITMQ_PASSWORD='replace-me' REACHER_POSTGRES_PASSWORD='replace-me' docker compose up -d
+#   docker compose up -d --scale reacher-worker=3
+
+x-reacher-common-env: &reacher-common-env
+  RCH__HELLO_NAME: ${REACHER_HELLO_NAME:-verify.arkentechsolutions.com}
+  RCH__FROM_EMAIL: ${REACHER_FROM_EMAIL:-verify@arkentechsolutions.com}
+  RCH__THROTTLE__MAX_REQUESTS_PER_DAY: ${REACHER_THROTTLE_MAX_REQUESTS_PER_DAY:-50000}
+
+x-reacher-bulk-env: &reacher-bulk-env
+  <<: *reacher-common-env
+  RCH__WORKER__ENABLE: "true"
+  RCH__WORKER__RABBITMQ__URL: amqp://${REACHER_RABBITMQ_USER:-reacher}:${REACHER_RABBITMQ_PASSWORD:-change-me}@rabbitmq:5672
+  RCH__STORAGE__0__POSTGRES__DB_URL: postgresql://${REACHER_POSTGRES_USER:-reacher}:${REACHER_POSTGRES_PASSWORD:-change-me}@reacher-postgres:5432/${REACHER_POSTGRES_DB:-reacher}
+  RCH__STORAGE__POSTGRES__DB_URL: postgresql://${REACHER_POSTGRES_USER:-reacher}:${REACHER_POSTGRES_PASSWORD:-change-me}@reacher-postgres:5432/${REACHER_POSTGRES_DB:-reacher}
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.0-management
+    hostname: reacher-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${REACHER_RABBITMQ_USER:-reacher}
+      RABBITMQ_DEFAULT_PASS: ${REACHER_RABBITMQ_PASSWORD:-change-me}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "127.0.0.1:15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  reacher-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${REACHER_POSTGRES_DB:-reacher}
+      POSTGRES_USER: ${REACHER_POSTGRES_USER:-reacher}
+      POSTGRES_PASSWORD: ${REACHER_POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - reacher_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${REACHER_POSTGRES_USER:-reacher} -d ${REACHER_POSTGRES_DB:-reacher}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  single-api:
+    image: reacherhq/backend:latest
+    restart: unless-stopped
+    environment:
+      <<: *reacher-common-env
+      RCH__HTTP_HOST: "0.0.0.0"
+      RCH__HTTP_PORT: "8080"
+      RCH__WORKER__ENABLE: "false"
+      RCH__SMTP_TIMEOUT: ${REACHER_SINGLE_SMTP_TIMEOUT:-20}
+      RCH__THROTTLE__MAX_REQUESTS_PER_MINUTE: ${REACHER_SINGLE_THROTTLE_MAX_REQUESTS_PER_MINUTE:-60}
+      RUST_LOG: ${REACHER_RUST_LOG:-reacher=info}
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  bulk-api:
+    image: reacherhq/backend:latest
+    restart: unless-stopped
+    environment:
+      <<: *reacher-bulk-env
+      RCH__HTTP_HOST: "0.0.0.0"
+      RCH__HTTP_PORT: "8080"
+      RCH__SMTP_TIMEOUT: ${REACHER_BULK_SMTP_TIMEOUT:-30}
+      RCH__THROTTLE__MAX_REQUESTS_PER_MINUTE: ${REACHER_BULK_THROTTLE_MAX_REQUESTS_PER_MINUTE:-120}
+      RCH__WORKER__RABBITMQ__CONCURRENCY: ${REACHER_API_RABBITMQ_CONCURRENCY:-1}
+      RUST_LOG: ${REACHER_RUST_LOG:-reacher=info}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      reacher-postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  reacher-worker:
+    image: reacherhq/backend:latest
+    restart: unless-stopped
+    environment:
+      <<: *reacher-bulk-env
+      RCH__SMTP_TIMEOUT: ${REACHER_BULK_SMTP_TIMEOUT:-30}
+      RCH__THROTTLE__MAX_REQUESTS_PER_MINUTE: ${REACHER_WORKER_THROTTLE_MAX_REQUESTS_PER_MINUTE:-120}
+      RCH__WORKER__RABBITMQ__CONCURRENCY: ${REACHER_WORKER_RABBITMQ_CONCURRENCY:-5}
+      RUST_LOG: ${REACHER_RUST_LOG:-reacher=info}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      reacher-postgres:
+        condition: service_healthy
+
+volumes:
+  rabbitmq_data:
+  reacher_postgres_data:
