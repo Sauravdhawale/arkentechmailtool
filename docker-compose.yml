@@ -3,8 +3,8 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: arkenmailtool
-      POSTGRES_USER: arkenmail
-      POSTGRES_PASSWORD: arkenmail
+      POSTGRES_USER: nobounce
+      POSTGRES_PASSWORD: NoBounceArken2026
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -17,7 +17,7 @@ services:
       dockerfile: deploy/Dockerfile.backend
     environment:
       PORT: 4000
-      DATABASE_URL: postgresql://arkenmail:arkenmail@postgres:5432/arkenmailtool?schema=public
+      DATABASE_URL: postgresql://nobounce:NoBounceArken2026@postgres:5432/arkenmailtool?schema=public
       REDIS_URL: redis://redis:6379
       REACHER_API_URL: https://verify.arkentechsolutions.com/v1/check_email
       REACHER_API_TOKEN: ""
@@ -39,7 +39,7 @@ services:
       context: .
       dockerfile: deploy/Dockerfile.worker
     environment:
-      DATABASE_URL: postgresql://arkenmail:arkenmail@postgres:5432/arkenmailtool?schema=public
+      DATABASE_URL: postgresql://nobounce:NoBounceArken2026@postgres:5432/arkenmailtool?schema=public
       REDIS_URL: redis://redis:6379
       REACHER_API_URL: https://verify.arkentechsolutions.com/v1/check_email
       REACHER_BULK_API_URL: https://verify.arkentechsolutions.com/v1/bulk
