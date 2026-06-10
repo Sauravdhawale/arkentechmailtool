@@ -152,7 +152,7 @@ export async function bulkJobRoutes(app: FastifyInstance) {
         fileName: file.filename,
         status: jobStatus,
         totalRecords: parsedUpload.totalRecords,
-        uniqueEmails: parsedUpload.uniqueEmailsToVerify,
+        uniqueEmails: emailsToVerify,
         duplicateEmails: duplicateRows,
         processedCount: initialProcessedCount,
         invalidCount: invalidRows,

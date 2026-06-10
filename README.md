@@ -36,6 +36,7 @@ Rules enforced by both frontend preview and backend validation:
 - no column mapping
 - only values from the email list/column are verified
 - duplicates are recorded and exported, but only the first unique email is sent to Reacher
+- fast filters mark invalid syntax, known malformed addresses, disposable domains, and domains without MX records before Reacher bulk submission
 - uploaded lists are submitted to Reacher's `/v1/bulk` job API, then the worker polls Reacher for progress and results
 - uploaded lists require Reacher bulk worker mode; list jobs do not fall back to `/v1/check_email`
 
@@ -154,6 +155,36 @@ REACHER_REQUEST_TIMEOUT_MS=35000
 CORS_ORIGIN=https://nobounce.arkentechsolutions.com
 ```
 
+Set worker prefilter variables:
+
+```env
+PREFILTER_DNS_CONCURRENCY=25
+PREFILTER_MX_TIMEOUT_MS=2500
+DISPOSABLE_EMAIL_DOMAINS=custom-temp-domain.com,another-temp-domain.net
+```
+
+## Bulk Verification Flow
+
+Bulk verification uses two stages to reduce Reacher SMTP work:
+
+1. Fast filtering in the NoBounce worker:
+   - invalid syntax
+   - known malformed addresses
+   - disposable email domains
+   - domains that definitely have no MX records
+
+2. Reacher bulk SMTP verification:
+   - only unique rows that pass Stage 1 are submitted to `REACHER_BULK_API_URL`
+
+Fast-filtered rows are saved as processed `invalid` results with a reason such
+as `Invalid email syntax`, `Disposable email domain`, or `Domain has no MX
+records`. They appear in job details and result downloads, but they do not call
+Reacher. MX lookups are cached per domain for each job, so a list with many
+emails on the same domain only performs one DNS MX lookup for that domain.
+
+DNS timeouts or temporary resolver errors are not treated as invalid because
+that could create false negatives. Those emails are allowed through to Reacher.
+
 ## Reacher Bulk Requirement
 
 NoBounce bulk lists use Reacher's `/v1/bulk` API only. Your self-hosted Reacher
@@ -264,6 +295,8 @@ returns as `unknown` instead of leaving the frontend stuck on "Verifying...".
 - Worker rate limit: `30` bulk job starts per minute
 - Bulk result page size: `1000`
 - Single verification Reacher request timeout: `35` seconds
+- Prefilter DNS concurrency: `25`
+- Prefilter MX timeout: `2.5` seconds per domain
 - Queue retry attempts: `2`
 - Upload limit: `10 MB`
 - Upload row limit: `100,000`

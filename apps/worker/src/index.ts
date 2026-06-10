@@ -1,5 +1,7 @@
 import "dotenv/config";
 import {
+  getEmailDomain,
+  isValidEmailSyntax,
   normalizeEmail,
   normalizeReacherResult,
   unwrapReacherResult,
@@ -8,6 +10,7 @@ import {
 } from "@arken/shared";
 import { EmailStatus, JobStatus, Prisma, PrismaClient } from "@prisma/client";
 import { Job, Worker } from "bullmq";
+import { resolveMx } from "node:dns/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 
@@ -24,7 +27,10 @@ const envSchema = z.object({
   WORKER_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(30),
   BULK_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   BULK_RESULTS_PAGE_SIZE: z.coerce.number().int().positive().max(1000).default(1000),
-  BULK_MAX_WAIT_MINUTES: z.coerce.number().int().positive().default(240)
+  BULK_MAX_WAIT_MINUTES: z.coerce.number().int().positive().default(240),
+  PREFILTER_DNS_CONCURRENCY: z.coerce.number().int().positive().default(25),
+  PREFILTER_MX_TIMEOUT_MS: z.coerce.number().int().positive().default(2500),
+  DISPOSABLE_EMAIL_DOMAINS: z.string().optional().default("")
 });
 
 const parsedConfig = envSchema.parse(process.env);
@@ -57,6 +63,22 @@ type PendingEmailResult = {
   id: string;
   email: string;
   normalizedEmail: string;
+  domain: string | null;
+};
+
+type PrefilterRejection = {
+  result: PendingEmailResult;
+  data: Prisma.EmailResultUpdateInput;
+};
+
+type PrefilterDecision = {
+  result: PendingEmailResult;
+  rejection: Prisma.EmailResultUpdateInput | null;
+};
+
+type MxLookupResult = {
+  hasMx: boolean | null;
+  reason?: string;
 };
 
 type ReacherBulkCreateResponse = {
@@ -89,6 +111,44 @@ class ReacherHttpError extends Error {
 
 const prisma = new PrismaClient();
 
+const builtInDisposableDomains = new Set([
+  "10minutemail.com",
+  "20minutemail.com",
+  "33mail.com",
+  "anonaddy.com",
+  "dispostable.com",
+  "dropmail.me",
+  "emailondeck.com",
+  "fakeinbox.com",
+  "getnada.com",
+  "guerrillamail.com",
+  "guerrillamail.net",
+  "guerrillamail.org",
+  "inboxkitten.com",
+  "maildrop.cc",
+  "mailinator.com",
+  "mailnesia.com",
+  "mintemail.com",
+  "moakt.com",
+  "sharklasers.com",
+  "spam4.me",
+  "tempmail.com",
+  "tempmail.net",
+  "tempmailo.com",
+  "throwawaymail.com",
+  "trashmail.com",
+  "yopmail.com"
+]);
+
+const extraDisposableDomains = config.DISPOSABLE_EMAIL_DOMAINS.split(",")
+  .map((domain) => domain.trim().toLowerCase())
+  .filter(Boolean);
+
+const disposableDomains = new Set([
+  ...builtInDisposableDomains,
+  ...extraDisposableDomains
+]);
+
 function connectionOptions(redisUrl: string) {
   const url = new URL(redisUrl);
   return {
@@ -105,6 +165,139 @@ const redisConnection = connectionOptions(config.REDIS_URL);
 
 function toPrismaStatus(status: NormalizedVerificationResult["status"]): EmailStatus {
   return status.toUpperCase() as EmailStatus;
+}
+
+function fastFilterData(
+  reason: string,
+  options: {
+    isDisposable?: boolean;
+    mxFound?: boolean | null;
+    smtpResult?: string | null;
+    check: string;
+  }
+): Prisma.EmailResultUpdateInput {
+  return {
+    status: EmailStatus.INVALID,
+    reason,
+    reacherIsReachable: "invalid",
+    isDisposable: options.isDisposable ?? false,
+    mxFound: options.mxFound,
+    smtpResult: options.smtpResult ?? "Skipped before SMTP",
+    rawResponseJson: {
+      stage: "fast_filter",
+      check: options.check,
+      reason
+    },
+    checkedAt: new Date()
+  };
+}
+
+function domainMatchesDisposableList(domain: string): boolean {
+  const normalizedDomain = domain.toLowerCase();
+  for (const disposableDomain of disposableDomains) {
+    if (
+      normalizedDomain === disposableDomain ||
+      normalizedDomain.endsWith(`.${disposableDomain}`)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isKnownMalformedEmail(email: string): boolean {
+  const normalized = normalizeEmail(email);
+  if (normalized.length > 254 || /[\s<>()[\],;:"\\]/.test(normalized)) {
+    return true;
+  }
+
+  const atIndex = normalized.lastIndexOf("@");
+  if (atIndex <= 0 || atIndex !== normalized.indexOf("@")) {
+    return true;
+  }
+
+  const local = normalized.slice(0, atIndex);
+  const domain = normalized.slice(atIndex + 1);
+  if (
+    local.length > 64 ||
+    local.startsWith(".") ||
+    local.endsWith(".") ||
+    local.includes("..") ||
+    domain.includes("..")
+  ) {
+    return true;
+  }
+
+  const labels = domain.split(".");
+  const tld = labels.at(-1) ?? "";
+  if (labels.length < 2 || tld.length < 2 || /^\d+$/.test(tld)) {
+    return true;
+  }
+
+  if (["example.com", "example.net", "example.org", "localhost"].includes(domain)) {
+    return true;
+  }
+
+  return labels.some(
+    (label) =>
+      label.length === 0 ||
+      label.length > 63 ||
+      label.startsWith("-") ||
+      label.endsWith("-") ||
+      !/^[a-z0-9-]+$/.test(label)
+  );
+}
+
+async function resolveMxWithTimeout(domain: string): Promise<MxLookupResult> {
+  const timeoutResult = Symbol("mx-timeout");
+  try {
+    const result = await Promise.race([
+      resolveMx(domain),
+      sleep(config.PREFILTER_MX_TIMEOUT_MS).then(() => timeoutResult)
+    ]);
+
+    if (result === timeoutResult) {
+      return { hasMx: null, reason: "MX lookup timed out" };
+    }
+
+    return { hasMx: Array.isArray(result) && result.length > 0 };
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+
+    if (["ENODATA", "ENOTFOUND", "ENODOMAIN", "NXDOMAIN"].includes(code)) {
+      return { hasMx: false };
+    }
+
+    return {
+      hasMx: null,
+      reason: error instanceof Error ? error.message : "MX lookup failed"
+    };
+  }
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index], index);
+      }
+    })
+  );
+
+  return results;
 }
 
 function isLegacyEmailJobData(
@@ -172,6 +365,143 @@ async function verifyEmail(email: string): Promise<NormalizedVerificationResult>
   );
 
   return normalizeReacherResult(email, raw);
+}
+
+async function fastFilterDecision(
+  result: PendingEmailResult,
+  mxCache: Map<string, Promise<MxLookupResult>>
+): Promise<PrefilterDecision> {
+  if (!isValidEmailSyntax(result.email)) {
+    return {
+      result,
+      rejection: fastFilterData("Invalid email syntax", {
+        check: "syntax",
+        mxFound: null
+      })
+    };
+  }
+
+  if (isKnownMalformedEmail(result.email)) {
+    return {
+      result,
+      rejection: fastFilterData("Known malformed address", {
+        check: "malformed",
+        mxFound: null
+      })
+    };
+  }
+
+  const domain = result.domain ?? getEmailDomain(result.normalizedEmail);
+  if (!domain) {
+    return {
+      result,
+      rejection: fastFilterData("Invalid email domain", {
+        check: "domain",
+        mxFound: null
+      })
+    };
+  }
+
+  if (domainMatchesDisposableList(domain)) {
+    return {
+      result,
+      rejection: fastFilterData("Disposable email domain", {
+        check: "disposable_domain",
+        isDisposable: true,
+        mxFound: null
+      })
+    };
+  }
+
+  let mxLookup = mxCache.get(domain);
+  if (!mxLookup) {
+    mxLookup = resolveMxWithTimeout(domain);
+    mxCache.set(domain, mxLookup);
+  }
+
+  const mxResult = await mxLookup;
+  if (mxResult.hasMx === false) {
+    return {
+      result,
+      rejection: fastFilterData("Domain has no MX records", {
+        check: "mx",
+        mxFound: false
+      })
+    };
+  }
+
+  return { result, rejection: null };
+}
+
+async function applyFastFilters(
+  jobId: string,
+  pendingResults: PendingEmailResult[]
+): Promise<PendingEmailResult[]> {
+  if (pendingResults.length === 0) {
+    return [];
+  }
+
+  const mxCache = new Map<string, Promise<MxLookupResult>>();
+  const decisions = await mapWithConcurrency(
+    pendingResults,
+    config.PREFILTER_DNS_CONCURRENCY,
+    (result) => fastFilterDecision(result, mxCache)
+  );
+
+  const rejected: PrefilterRejection[] = [];
+  const remaining: PendingEmailResult[] = [];
+
+  for (const decision of decisions) {
+    if (decision.rejection) {
+      rejected.push({
+        result: decision.result,
+        data: decision.rejection
+      });
+      continue;
+    }
+    remaining.push(decision.result);
+  }
+
+  const operations: Prisma.PrismaPromise<unknown>[] = [];
+  const flush = async () => {
+    if (operations.length === 0) {
+      return;
+    }
+    const batch = operations.splice(0, operations.length);
+    await prisma.$transaction(batch);
+    await ensureCanContinue(jobId);
+  };
+
+  for (const rejection of rejected) {
+    operations.push(
+      prisma.emailResult.update({
+        where: { id: rejection.result.id },
+        data: rejection.data
+      })
+    );
+
+    if (operations.length >= 100) {
+      await flush();
+    }
+  }
+
+  await flush();
+
+  await prisma.bulkJob.updateMany({
+    where: {
+      id: jobId,
+      status: { not: JobStatus.CANCELLED }
+    },
+    data: {
+      uniqueEmails: remaining.length
+    }
+  });
+
+  if (rejected.length > 0) {
+    await recomputeJobCounters(jobId, JobStatus.PROCESSING);
+  }
+
+  return remaining;
 }
 
 async function isStopped(jobId: string): Promise<boolean> {
@@ -252,6 +582,11 @@ async function recomputeJobCounters(
 
   const statusCount = new Map(statusGroups.map((group) => [group.status, group._count._all]));
 
+  const isFinished =
+    status === JobStatus.COMPLETED ||
+    status === JobStatus.FAILED ||
+    status === JobStatus.CANCELLED;
+
   await prisma.bulkJob.update({
     where: { id: jobId },
     data: {
@@ -263,7 +598,7 @@ async function recomputeJobCounters(
       unknownCount: statusCount.get(EmailStatus.UNKNOWN) ?? 0,
       disposableCount,
       acceptAllCount,
-      completedAt: new Date(),
+      completedAt: isFinished ? new Date() : null,
       errorMessage
     }
   });
@@ -767,7 +1102,8 @@ async function processBulkVerificationJob(
       select: {
         id: true,
         email: true,
-        normalizedEmail: true
+        normalizedEmail: true,
+        domain: true
       }
     });
 
@@ -778,12 +1114,20 @@ async function processBulkVerificationJob(
 
     await ensureCanContinue(jobId);
 
+    const filteredResults = bulkJob.reacherBulkJobId
+      ? pendingResults
+      : await applyFastFilters(jobId, pendingResults);
+    if (filteredResults.length === 0) {
+      await recomputeJobCounters(jobId, JobStatus.COMPLETED);
+      return;
+    }
+
     const baselineProcessed = await processedCountFromResults(jobId);
     const remoteJobId =
       bulkJob.reacherBulkJobId ??
       (await submitReacherBulkJob(
         jobId,
-        pendingResults.map((result) => result.email)
+        filteredResults.map((result) => result.email)
       ));
 
     await pollReacherBulkJob(
@@ -793,8 +1137,8 @@ async function processBulkVerificationJob(
       bulkJob.totalRecords
     );
 
-    const rawResults = await fetchAllBulkResults(jobId, remoteJobId, pendingResults.length);
-    await saveBulkResults(jobId, pendingResults, rawResults);
+    const rawResults = await fetchAllBulkResults(jobId, remoteJobId, filteredResults.length);
+    await saveBulkResults(jobId, filteredResults, rawResults);
   } catch (error) {
     if (error instanceof JobStoppedError) {
       return;
